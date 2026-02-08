@@ -1,66 +1,92 @@
-import Image from "next/image";
+// app/page.tsx
+"use client";
+
+import React, { useMemo, useState } from "react";
+import type { Mode } from "@/types/api";
+import { toDatetimeLocalValue } from "@/lib/time";
+import { useGeolocation } from "@/hooks/useGeolocation";
+import { useRecommendations } from "@/hooks/useRecommendations";
+import { LocationPanel } from "@/components/LocationPanel";
+import { ModePanel } from "@/components/ModePanel";
+import { Results } from "@/components/Results";
 import styles from "./page.module.css";
 
-export default function Home() {
+export default function Page() {
+  const [lat, setLat] = useState<string>("");
+  const [lon, setLon] = useState<string>("");
+  const [radiusMiles, setRadiusMiles] = useState<number>(30);
+  const [mode, setMode] = useState<Mode>("now");
+
+  const [departAtLocal, setDepartAtLocal] = useState<string>(() => {
+    const d = new Date();
+    d.setMinutes(d.getMinutes() + 30);
+    return toDatetimeLocalValue(d);
+  });
+
+  const { getLocation, error: geoError } = useGeolocation();
+  const { run, loading, error: apiError, data } = useRecommendations();
+
+  const hasCoords = useMemo(() => {
+    const la = Number(lat);
+    const lo = Number(lon);
+    return Number.isFinite(la) && Number.isFinite(lo);
+  }, [lat, lon]);
+
+  async function onUseMyLocation() {
+    const loc = await getLocation();
+    if (loc) {
+      setLat(String(loc.lat));
+      setLon(String(loc.lon));
+    }
+  }
+
+  async function onFind() {
+    if (!hasCoords) return;
+
+    const departAtISO = mode === "later" ? new Date(departAtLocal).toISOString() : undefined;
+
+    await run({
+      lat: Number(lat),
+      lon: Number(lon),
+      radiusMiles,
+      mode,
+      departAtISO,
+    });
+  }
+
+  const error = apiError || geoError;
+
   return (
-    <div className={styles.page}>
-      <main className={styles.main}>
-        <Image
-          className={styles.logo}
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
+    <main className={styles.container}>
+      <h1 className={styles.title}>Adventure Planner</h1>
+      <p className={styles.subtitle}>P0: Find the best nearby beaches for a sunset (top 3).</p>
+
+
+      <section className={styles.panel}>
+        <LocationPanel
+          lat={lat}
+          lon={lon}
+          radiusMiles={radiusMiles}
+          onLatChange={setLat}
+          onLonChange={setLon}
+          onRadiusChange={setRadiusMiles}
+          onUseMyLocation={onUseMyLocation}
         />
-        <div className={styles.intro}>
-          <h1>To get started, edit the page.tsx file.</h1>
-          <p>
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className={styles.ctas}>
-          <a
-            className={styles.primary}
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className={styles.logo}
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className={styles.secondary}
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
-    </div>
+
+        <ModePanel
+          mode={mode}
+          departAtLocal={departAtLocal}
+          onModeChange={setMode}
+          onDepartAtLocalChange={setDepartAtLocal}
+          loading={loading}
+          onFind={onFind}
+        />
+
+        {error && <div className={styles.error}>{error}</div>}
+        {data?.message && <div className={styles.message}>{data.message}</div>}
+      </section>
+
+      {data && <Results data={data} />}
+    </main>
   );
 }

@@ -97,20 +97,22 @@ function haversineMiles(lat1: number, lon1: number, lat2: number, lon2: number) 
 // 1) Beaches via Overpass (single call)
 // ---------------------------
 async function fetchBeachesOverpass(lat: number, lon: number, radiusMiles: number): Promise<Beach[]> {
-  const cellKey = `beaches:${round2(lat)}:${round2(lon)}:${radiusMiles}`;
+  const cellKey = `beaches:v2:${round2(lat)}:${round2(lon)}:${radiusMiles}`;
   const cached = cacheGet<Beach[]>(cellKey);
   if (cached) return cached;
 
   const { south, west, north, east } = bboxFromRadiusMiles(lat, lon, radiusMiles);
 
-  const query = `
+const query = `
 [out:json][timeout:25];
 (
-  nwr["natural"="beach"](${south},${west},${north},${east});
-  nwr["place"="beach"](${south},${west},${north},${east});
+  node["natural"="beach"]["name"](${south},${west},${north},${east});
+  way["natural"="beach"]["name"](${south},${west},${north},${east});
+  relation["natural"="beach"]["name"](${south},${west},${north},${east});
 );
 out center tags;
 `.trim();
+
 
   // Public Overpass endpoint (fine for P0). No parallelization.
   const url = "https://overpass-api.de/api/interpreter";
@@ -149,14 +151,23 @@ out center tags;
 
     if (bLat == null || bLon == null) continue;
 
-    const name =
-      (tags["name"]?.trim() ||
-        tags["name:en"]?.trim() ||
-        "Unnamed beach") as string;
+    const name = (tags["name"]?.trim() || tags["name:en"]?.trim() || "").trim();
+    if (!name) continue;
+
 
     // Access filtering (P0)
     const access = (tags["access"] || "").toLowerCase();
     if (access === "no" || access === "private") continue;
+    if (tags["marsh"] === "yes") continue;
+    if ((tags["natural"] || "").toLowerCase() === "wetland") continue;
+
+    const landuse = (tags["landuse"] || "").toLowerCase();
+    if (landuse === "industrial" || landuse === "port") continue;
+
+    if (tags["military"]) continue;
+
+    const leisure = (tags["leisure"] || "").toLowerCase();
+    if (leisure === "marina") continue;
 
     normalized.push({ osmType, osmId, name, lat: bLat, lon: bLon, tags });
   }
