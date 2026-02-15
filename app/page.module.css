@@ -1,82 +1,338 @@
+/* app/page.module.css */
+
+/* =========================
+   Theme tokens
+   ========================= */
+:root {
+  --bg: #0b0d10;
+
+  /* Panels */
+  --panel: rgba(255, 255, 255, 0.07);
+  --panel2: rgba(255, 255, 255, 0.09);
+
+  /* Borders / shadows */
+  --border: rgba(255, 255, 255, 0.16);
+  --shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+
+  /* Text */
+  --text: rgba(255, 255, 255, 0.94);
+  --muted: rgba(255, 255, 255, 0.80);
+  --muted2: rgba(255, 255, 255, 0.64);
+
+  /* Inputs */
+  --inputBg: rgba(0, 0, 0, 0.30);
+  --inputBorder: rgba(255, 255, 255, 0.18);
+  --inputBorderFocus: rgba(255, 255, 255, 0.26);
+}
+
+/* =========================
+   Page layout
+   ========================= */
 .container {
-  max-width: 900px;
+  min-height: 100vh;
+  background:
+    radial-gradient(1000px 500px at 30% 0%, rgba(255, 255, 255, 0.07), transparent 60%),
+    radial-gradient(900px 500px at 90% 20%, rgba(255, 255, 255, 0.06), transparent 60%),
+    var(--bg);
+  color: var(--text);
+}
+
+.inner {
+  max-width: 980px;
   margin: 0 auto;
-  padding: 24px;
-  font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial;
+  padding: 28px 18px 60px;
+}
+
+.header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+
+.brand {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
 .title {
-  font-size: 28px;
-  margin-bottom: 8px;
+  font-size: 34px;
+  line-height: 1.1;
+  margin: 0;
+  letter-spacing: -0.02em;
 }
 
 .subtitle {
-  margin-top: 0;
-  margin-bottom: 20px;
-  color: #444;
+  margin: 0;
+  color: var(--muted);
+  font-size: 14px;
 }
 
+.badge {
+  font-size: 12px;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+/* =========================
+   Search panel
+   ========================= */
 .panel {
-  border: 1px solid #ddd;
-  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.05));
+  border-radius: 16px;
   padding: 16px;
-  margin-bottom: 18px;
+  box-shadow: var(--shadow);
+}
+
+.panelTop {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.panelTitle {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.panelHint {
+  font-size: 12px;
+  color: var(--muted2);
+}
+
+.formGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr 160px;
+  gap: 10px;
+}
+
+@media (max-width: 760px) {
+  .formGrid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.label {
+  font-size: 12px;
+  color: var(--muted);
+  letter-spacing: 0.01em;
+}
+
+.input {
+  background: var(--inputBg);
+  border: 1px solid var(--inputBorder);
+  color: var(--text);
+  padding: 10px 12px;
+  border-radius: 12px;
+  outline: none;
+  font-size: 14px;
+}
+
+.input::placeholder {
+  color: rgba(255, 255, 255, 0.45);
+}
+
+.input:focus {
+  border-color: var(--inputBorderFocus);
 }
 
 .row {
   display: flex;
   flex-wrap: wrap;
-  gap: 12px;
   align-items: center;
+  gap: 10px;
+  margin-top: 12px;
 }
 
-.spacerRight {
+.segment {
+  display: inline-flex;
+  gap: 6px;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.22);
+}
+
+.segment button {
+  border: 0;
+  background: transparent;
+  color: var(--muted2);
+  padding: 8px 10px;
+  border-radius: 10px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.segment button[data-active="true"] {
+  background: rgba(255, 255, 255, 0.12);
+  color: var(--text);
+}
+
+.primary {
   margin-left: auto;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.14);
+  color: var(--text);
+  padding: 10px 14px;
+  border-radius: 12px;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.primary:hover {
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.primary:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.secondary {
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.10);
+  color: rgba(255, 255, 255, 0.92);
+  padding: 10px 12px;
+  border-radius: 12px;
+  cursor: pointer;
+  font-weight: 700;
+  font-size: 13px;
+}
+
+.secondary:hover {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.secondary:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 .error {
   margin-top: 12px;
-  color: #b00020;
-  font-size: 14px;
+  color: #ff7a7a;
+  font-size: 13px;
 }
 
 .message {
   margin-top: 12px;
-  color: #555;
-  font-size: 14px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+/* =========================
+   Results
+   ========================= */
+.resultsHeader {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 22px 0 10px;
+}
+
+.resultsTitle {
+  margin: 0;
+  font-size: 16px;
+  color: var(--text);
+  font-weight: 750;
+}
+
+.resultsMeta {
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
 }
 
 .grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  grid-template-columns: repeat(3, 1fr);
   gap: 12px;
 }
 
+@media (max-width: 980px) {
+  .grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* =========================
+   Cards
+   ========================= */
 .card {
-  border: 1px solid #ddd;
-  border-radius: 12px;
-  padding: 14px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 16px;
+  padding: 18px; /* more breathing room */
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.28);
+  transition: transform 120ms ease, border-color 120ms ease, background 120ms ease;
+}
+
+.card:hover {
+  transform: translateY(-2px);
+  border-color: rgba(255, 255, 255, 0.22);
+  background: rgba(255, 255, 255, 0.08);
 }
 
 .cardTop {
   display: flex;
   justify-content: space-between;
-  gap: 10px;
+  gap: 12px;
+  align-items: flex-start;
 }
 
 .cardTitle {
-  font-weight: 700;
+  font-weight: 820;
+  font-size: 17px;
+  margin: 0;
+  color: rgba(255, 255, 255, 0.96);
 }
 
-.cardScore {
-  font-weight: 700;
+.cardSub {
+  margin-top: 6px;
+  font-size: 14px; /* bigger */
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.76); /* higher contrast */
 }
 
-.muted {
-  font-size: 13px;
-  color: #555;
+/* If your components use className={styles.eta}, this will apply.
+   If not, add it in ResultCard (see note below). */
+.eta {
+  font-size: 14px; /* bigger */
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.76);
+  margin-top: 6px;
 }
 
+.score {
+  font-weight: 800;
+  font-size: 15px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(0, 0, 0, 0.22);
+  padding: 6px 10px;
+  border-radius: 999px;
+  white-space: nowrap;
+  color: rgba(255, 255, 255, 0.92);
+}
+
+/* =========================
+   Chips
+   ========================= */
 .chips {
   margin-top: 10px;
   display: flex;
@@ -84,10 +340,113 @@
   gap: 6px;
 }
 
+/* Dark UI friendly chips (readable) */
 .chip {
   font-size: 12px;
-  border: 1px solid #ccc;
+  color: rgba(255, 255, 255, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.10);
+  padding: 6px 10px;
   border-radius: 999px;
-  padding: 4px 8px;
-  background: #fafafa;
+}
+
+/* =========================
+   Why / description
+   ========================= */
+.cardWhy {
+  margin-top: 10px;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.76); /* higher contrast */
+  line-height: 1.5;
+}
+
+/* =========================
+   Actions
+   ========================= */
+.cardActions {
+  margin-top: 12px;
+  display: flex;
+  gap: 10px;
+}
+
+.link {
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.92);
+  text-decoration: none;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(0, 0, 0, 0.18);
+  padding: 8px 10px;
+  border-radius: 12px;
+}
+
+.link:hover {
+  border-color: rgba(255, 255, 255, 0.22);
+  background: rgba(0, 0, 0, 0.26);
+}
+
+.toolbar {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.toolbarLeft {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: flex-end;
+}
+
+.toolbarRight {
+  margin-left: auto;
+  display: flex;
+  gap: 10px;
+  align-items: flex-end;
+}
+
+.modeRow {
+  margin-top: 10px;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  color: rgba(255,255,255,0.78);
+  font-size: 13px;
+}
+
+/* =========================
+   Results layout
+   ========================= */
+.resultsSection {
+  margin-top: 22px;
+}
+
+.resultsHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.resultsTitle {
+  margin: 0;
+  font-size: 18px;
+  letter-spacing: -0.01em;
+}
+
+.sunsetMeta {
+  font-size: 14px; /* bigger than before */
+  color: var(--muted);
+}
+
+.cardsWrapper {
+  max-width: 1100px; /* prevents giant stretched cards */
+}
+
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 14px; /* denser than before */
+  align-items: stretch;
 }

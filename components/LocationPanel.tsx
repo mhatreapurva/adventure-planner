@@ -2,6 +2,7 @@
 "use client";
 
 import React from "react";
+import styles from "@/app/page.module.css";
 
 export function LocationPanel(props: {
   lat: string;
@@ -14,11 +15,7 @@ export function LocationPanel(props: {
 }) {
   return (
     <div style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "center" }}>
-      <button
-        onClick={props.onUseMyLocation}
-        style={{ padding: "10px 12px", borderRadius: 10, border: "1px solid #ccc", background: "white", cursor: "pointer" }}
-        type="button"
-      >
+      <button type="button" onClick={props.onUseMyLocation} className={styles.secondary}>
         Use my location
       </button>
 

@@ -3,36 +3,39 @@
 
 import React from "react";
 import type { Recommendation } from "@/types/api";
+import styles from "@/app/page.module.css";
 
 export function ResultCard({ r }: { r: Recommendation }) {
-  const mapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${r.lat},${r.lon}`)}`;
+  const mapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
+    `${r.lat},${r.lon}`
+  )}`;
 
   return (
-    <div style={{ border: "1px solid #ddd", borderRadius: 12, padding: 14 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
-        <div style={{ fontWeight: 700 }}>{r.name}</div>
-        <div style={{ fontWeight: 700 }}>{r.score}/100</div>
+    <div className={styles.card}>
+      <div className={styles.cardTop}>
+        <div>
+          <div className={styles.cardTitle}>{r.name}</div>
+          <div className={styles.eta}>ETA: {r.eta_minutes} min</div>
+        </div>
+
+        <div className={styles.score}>{r.score}/100</div>
       </div>
 
-      <div style={{ marginTop: 6, fontSize: 13, color: "#555" }}>
-        ETA: <strong>{r.eta_minutes} min</strong>
-      </div>
-
-      <div style={{ marginTop: 10, display: "flex", flexWrap: "wrap", gap: 6 }}>
+      <div className={styles.chips}>
         {r.chips.map((c) => (
-          <span key={c} style={{ fontSize: 12, border: "1px solid #ccc", borderRadius: 999, padding: "4px 8px", background: "#fafafa" }}>
+          <span key={c} className={styles.chip}>
             {c}
           </span>
         ))}
       </div>
 
-      <div style={{ marginTop: 10, fontSize: 13, color: "#333" }}>{r.why}</div>
-
-      <div style={{ marginTop: 12 }}>
-        <a href={mapsUrl} target="_blank" rel="noreferrer" style={{ fontSize: 13 }}>
+      {/* Remove r.why to avoid repeating chips */}
+      <div className={styles.cardActions}>
+        <a href={mapsUrl} target="_blank" rel="noreferrer" className={styles.link}>
           Open in Google Maps
         </a>
       </div>
     </div>
   );
 }
+
