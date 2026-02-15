@@ -216,19 +216,93 @@ async function getSunsetTimeISO(lat: number, lon: number, dateISO: string): Prom
 }
 
 // ---------------------------
-// 3) Weather + Routing providers (stubs)
-// Replace these with real providers (OpenWeather, Tomorrow.io, Mapbox, Google, etc.)
+// 3) Weather + Routing providers
 // ---------------------------
-async function getWeatherAtSunset(_lat: number, _lon: number, _sunsetUtcISO: string): Promise<WeatherAtSunset> {
-  // P0 stub: returns plausible defaults.
-  // Replace with hourly forecast nearest sunset.
-  return {
-    cloudCoverPct: 20,
-    tempF: 62,
-    windMph: 10,
-    hazeRisk: false,
-  };
+async function getWeatherAtSunset(lat: number, lon: number, sunsetUtcISO: string): Promise<WeatherAtSunset> {
+  // Open-Meteo: free, no key. We'll request hourly series in UTC and pick the hour closest to sunset.
+  // Docs: https://open-meteo.com/en/docs
+
+  const dateISO = sunsetUtcISO.slice(0, 10); // YYYY-MM-DD
+  const cacheKey = `wx:openmeteo:v1:${round2(lat)}:${round2(lon)}:${dateISO}`;
+  const cached = cacheGet<WeatherAtSunset>(cacheKey);
+  if (cached) return cached;
+
+  // Build Open-Meteo URL
+  const url = new URL("https://api.open-meteo.com/v1/forecast");
+  url.searchParams.set("latitude", String(lat));
+  url.searchParams.set("longitude", String(lon));
+  url.searchParams.set("timezone", "UTC");
+  url.searchParams.set("hourly", "cloud_cover,temperature_2m,wind_speed_10m");
+  url.searchParams.set("start_date", dateISO);
+  url.searchParams.set("end_date", dateISO);
+
+  try {
+    const resp = await fetch(url.toString(), { method: "GET" });
+    if (!resp.ok) {
+      throw new Error(`Open-Meteo error: HTTP ${resp.status}`);
+    }
+
+    const j = await resp.json();
+
+    const hourly = j?.hourly;
+    const times: string[] = Array.isArray(hourly?.time) ? hourly.time : [];
+    const cloud: number[] = Array.isArray(hourly?.cloud_cover) ? hourly.cloud_cover : [];
+    const tempC: number[] = Array.isArray(hourly?.temperature_2m) ? hourly.temperature_2m : [];
+    const windKmh: number[] = Array.isArray(hourly?.wind_speed_10m) ? hourly.wind_speed_10m : [];
+
+    if (!times.length || times.length !== cloud.length || times.length !== tempC.length || times.length !== windKmh.length) {
+      throw new Error("Open-Meteo: malformed hourly arrays");
+    }
+
+    const tSunset = new Date(sunsetUtcISO).getTime();
+    if (!Number.isFinite(tSunset)) throw new Error("Invalid sunsetUtcISO");
+
+    // Find closest hourly time to sunset
+    let bestIdx = 0;
+    let bestDelta = Number.POSITIVE_INFINITY;
+
+    for (let i = 0; i < times.length; i++) {
+      // Open-Meteo times look like "2026-02-08T01:00"
+      const t = new Date(times[i] + ":00Z").getTime(); // force UTC
+      const delta = Math.abs(t - tSunset);
+      if (delta < bestDelta) {
+        bestDelta = delta;
+        bestIdx = i;
+      }
+    }
+
+    const cloudCoverPct = Math.max(0, Math.min(100, Math.round(Number(cloud[bestIdx]))));
+
+    // Convert C -> F
+    const tempF = Math.round((Number(tempC[bestIdx]) * 9) / 5 + 32);
+
+    // Convert km/h -> mph
+    const windMph = Math.round(Number(windKmh[bestIdx]) * 0.621371);
+
+    // P0: Haze is hard without visibility / aerosols. Keep conservative.
+    const hazeRisk = false;
+
+    const wx: WeatherAtSunset = {
+      cloudCoverPct,
+      tempF,
+      windMph,
+      hazeRisk,
+    };
+
+    // Cache for 60 minutes (hourly data changes; keep it fresh)
+    cacheSet(cacheKey, wx, 60 * 60 * 1000);
+    return wx;
+  } catch (e) {
+    // Fail open: return the old stub-like defaults so recommendations still work.
+    return {
+      cloudCoverPct: 20,
+      tempF: 62,
+      windMph: 10,
+      hazeRisk: false,
+    };
+  }
 }
+
 
 async function getEtaMinutes(_fromLat: number, _fromLon: number, _toLat: number, _toLon: number, _departAtISO: string): Promise<{ etaMinutes: number; trafficLabel: "Low traffic" | "Heavy traffic" | null }> {
   // P0 stub: rough distance / 35mph average.
