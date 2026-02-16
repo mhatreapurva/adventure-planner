@@ -101,7 +101,6 @@ export default function Page() {
         <div className={styles.header}>
           <div className={styles.brand}>
             <h1 className={styles.title}>Adventure Planner</h1>
-            <p className={styles.subtitle}>P0: Find the best nearby beaches for a sunset (top 3).</p>
           </div>
         </div>
 
