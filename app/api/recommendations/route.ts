@@ -1,28 +1,10 @@
 // app/api/recommendations/route.ts
-import { NextRequest, NextResponse } from "next/server";
-
-export const runtime = "nodejs";
+import { NextResponse } from "next/server";
 
 // ---------------------------
 // Types
 // ---------------------------
 type Mode = "now" | "later";
-
-type Beach = {
-  osmType: "node" | "way" | "relation";
-  osmId: number;
-  name: string;
-  lat: number;
-  lon: number;
-  tags: Record<string, string>;
-};
-
-type WeatherAtSunset = {
-  cloudCoverPct: number; // 0..100
-  tempF: number;
-  windMph: number;
-  hazeRisk: boolean;
-};
 
 type Recommendation = {
   name: string;
@@ -32,11 +14,53 @@ type Recommendation = {
   eta_minutes: number;
   chips: string[];
   why: string;
+  sunset_time_local: string; // ISO string in local timezone (Open-Meteo "timezone=auto" output)
+};
+
+type RecommendationsResponse = {
+  mode: Mode;
+  radius_miles: number;
+  depart_at?: string;
   sunset_time_local: string;
+  results: Recommendation[];
+};
+
+type OverpassElement = {
+  type: "node" | "way" | "relation";
+  id: number;
+  lat?: number;
+  lon?: number;
+  center?: { lat: number; lon: number };
+  tags?: Record<string, string>;
+};
+
+type BeachCandidate = {
+  name: string;
+  lat: number;
+  lon: number;
+  tags: Record<string, string>;
+};
+
+type WxAtTime = {
+  // “sky”
+  cloudCoverPct: number;
+  hazeRisk: boolean;
+
+  // rain / precip
+  precipMm: number;
+  precipProb: number;
+  weatherCode: number;
+
+  // comfort
+  tempF: number;
+  windMph: number;
+
+  // time (local)
+  timeLocalISO: string;
 };
 
 // ---------------------------
-// Tiny in-memory cache (P0)
+// Tiny in-memory cache (best-effort)
 // ---------------------------
 const memCache = new Map<string, { value: any; expiresAt: number }>();
 
@@ -94,6 +118,31 @@ function sleep(ms: number) {
 }
 
 // ---------------------------
+// Chips: remove empties + dedupe
+// ---------------------------
+function cleanChips(input: Array<string | null | undefined>): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+
+  for (const raw of input) {
+    if (typeof raw !== "string") continue;
+    const s = raw.trim();
+    if (!s) continue;
+    if (seen.has(s)) continue;
+    seen.add(s);
+    out.push(s);
+  }
+
+  return out;
+}
+
+function buildWhy(chips: string[]) {
+  // short “because …” string; safe even if chips is empty
+  if (!chips || chips.length === 0) return "No signals available.";
+  return chips.slice(0, 3).join(" • ");
+}
+
+// ---------------------------
 // Overpass: fallback endpoints + retry
 // ---------------------------
 const OVERPASS_ENDPOINTS = [
@@ -108,7 +157,7 @@ async function postOverpass(query: string): Promise<any> {
   for (let i = 0; i < OVERPASS_ENDPOINTS.length; i++) {
     const url = OVERPASS_ENDPOINTS[i];
 
-    // a couple retries per endpoint for 504s/timeouts
+    // retries per endpoint
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
         const resp = await fetch(url, {
@@ -119,295 +168,295 @@ async function postOverpass(query: string): Promise<any> {
 
         if (!resp.ok) {
           const text = await resp.text().catch(() => "");
-          // retry common transient failures
-          if (resp.status === 429 || resp.status === 502 || resp.status === 503 || resp.status === 504) {
-            lastErr = new Error(`Overpass transient error: HTTP ${resp.status} (${url}). ${text.slice(0, 120)}`);
-            await sleep(350 * (attempt + 1));
+          const is504 = resp.status === 504 || text.includes("HTTP 504");
+          lastErr = new Error(`Overpass error ${resp.status}: ${text.slice(0, 200)}`);
+          if (is504) {
+            await sleep(400 + attempt * 400);
             continue;
           }
-          throw new Error(`Overpass error: HTTP ${resp.status} (${url}). ${text.slice(0, 200)}`);
+          throw lastErr;
         }
 
-        return await resp.json();
+        const json = await resp.json();
+        return json;
       } catch (e: any) {
         lastErr = e;
-        await sleep(250 * (attempt + 1));
+        await sleep(400 + attempt * 400);
       }
     }
   }
 
-  throw lastErr ?? new Error("Overpass error: all endpoints failed");
+  throw lastErr ?? new Error("Overpass request failed");
 }
 
 // ---------------------------
-// 1) Beaches via Overpass
-// - stricter filters
-// - drop obvious non-beaches
-// - avoid unnamed
-// - water-proximity validation
+// Overpass query / parsing
 // ---------------------------
-function isObviouslyNotABeach(tags: Record<string, string>): boolean {
-  const leisure = (tags["leisure"] || "").toLowerCase();
-  const sport = (tags["sport"] || "").toLowerCase();
-  const natural = (tags["natural"] || "").toLowerCase();
-  const place = (tags["place"] || "").toLowerCase();
-  const manMade = (tags["man_made"] || "").toLowerCase();
-  const amenity = (tags["amenity"] || "").toLowerCase();
+function buildBeachOverpassQuery(bbox: { south: number; west: number; north: number; east: number }) {
+  // We focus on real beaches:
+  // - natural=beach (best)
+  // - tourism=beach / leisure=beach_resort (rare but ok)
+  // We *avoid* generic "beach" name-only junk inland.
+  //
+  // We request center for ways/relations.
+  return `
+[out:json][timeout:25];
+(
+  node["natural"="beach"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
+  way["natural"="beach"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
+  relation["natural"="beach"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
 
-  // common false positives
-  if (sport.includes("volleyball") || sport.includes("beachvolleyball")) return true;
-  if (leisure === "pitch" || leisure === "sports_centre" || leisure === "stadium") return true;
+  node["tourism"="beach"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
+  way["tourism"="beach"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
+  relation["tourism"="beach"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
 
-  // stuff that shouldn't be “beach”
-  if (amenity) return true;
-  if (manMade) return true;
+  node["leisure"="beach_resort"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
+  way["leisure"="beach_resort"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
+  relation["leisure"="beach_resort"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
+);
+out center tags;
+`.trim();
+}
 
-  // allow the real beach tags
-  if (natural === "beach") return false;
-  if (place === "beach") {
-    // "place=beach" can be junk; if it also has "natural=beach" it's fine
-    return natural !== "beach";
-  }
+function elementToCandidate(el: OverpassElement): BeachCandidate | null {
+  const tags = el.tags ?? {};
+  const lat = el.lat ?? el.center?.lat;
+  const lon = el.lon ?? el.center?.lon;
+  if (typeof lat !== "number" || typeof lon !== "number") return null;
+
+  // Name
+  const name =
+    tags.name ||
+    tags["name:en"] ||
+    tags["alt_name"] ||
+    "Unnamed beach";
+
+  return { name, lat, lon, tags };
+}
+
+// Heuristic filter to kill obvious junk:
+// - Must have natural=beach OR tourism=beach OR leisure=beach_resort
+// - Reject if it looks like a “playground/park/lake beach” style unless explicitly beach-tagged (still can slip, but much less)
+// - Reject if it’s very clearly not a place (no tags at all)
+function isPlausibleBeach(b: BeachCandidate): boolean {
+  const t = b.tags || {};
+  const natural = t.natural;
+  const tourism = t.tourism;
+  const leisure = t.leisure;
+
+  const taggedAsBeach =
+    natural === "beach" || tourism === "beach" || leisure === "beach_resort";
+
+  if (!taggedAsBeach) return false;
+
+  // Reject some inland-ish “beach” misuse:
+  // If it's explicitly on a lake/river etc and not coastal, we’ll downrank later anyway.
+  // But this knocks out many fake ones.
+  const water = (t.water || "").toLowerCase();
+  const waterway = (t.waterway || "").toLowerCase();
+  const landuse = (t.landuse || "").toLowerCase();
+
+  const inlandSignals = ["lake", "reservoir", "river", "canal", "pond", "basin"];
+  const inlandHit =
+    inlandSignals.includes(water) ||
+    inlandSignals.includes(waterway) ||
+    landuse === "reservoir";
+
+  // If it screams inland AND no other strong beach hints, drop it.
+  // (keeps bay beaches that are tagged properly, but removes most fake “beach” POIs)
+  if (inlandHit && natural !== "beach") return false;
 
   return true;
 }
 
-function bestName(tags: Record<string, string>) {
-  const n =
-    tags["name"]?.trim() ||
-    tags["name:en"]?.trim() ||
-    tags["official_name"]?.trim() ||
-    tags["alt_name"]?.trim() ||
-    tags["loc_name"]?.trim() ||
-    "";
-  return n;
+// ---------------------------
+// Open-Meteo helpers
+// ---------------------------
+
+// Pick the hourly index closest to a given ISO timestamp.
+// If nothing matches well, fallback to index 0.
+function closestHourlyIndex(hourlyTimes: string[], targetISO: string) {
+  const target = Date.parse(targetISO);
+  if (!Number.isFinite(target)) return 0;
+
+  let bestIdx = 0;
+  let bestAbs = Infinity;
+
+  for (let i = 0; i < hourlyTimes.length; i++) {
+    const t = Date.parse(hourlyTimes[i]);
+    if (!Number.isFinite(t)) continue;
+    const abs = Math.abs(t - target);
+    if (abs < bestAbs) {
+      bestAbs = abs;
+      bestIdx = i;
+    }
+  }
+
+  return bestIdx;
 }
 
-async function fetchBeachesOverpass(lat: number, lon: number, radiusMiles: number): Promise<Beach[]> {
-  const cellKey = `beaches:v2:${round2(lat)}:${round2(lon)}:${radiusMiles}`;
-  const cached = cacheGet<Beach[]>(cellKey);
+async function fetchSunsetAndWx(lat: number, lon: number): Promise<{ sunsetLocalISO: string; wxAtSunset: WxAtTime }> {
+  // Cache per rounded location for a short TTL
+  const key = `wx:${round2(lat)}:${round2(lon)}`;
+  const cached = cacheGet<{ sunsetLocalISO: string; wxAtSunset: WxAtTime }>(key);
   if (cached) return cached;
 
-  const { south, west, north, east } = bboxFromRadiusMiles(lat, lon, radiusMiles);
+  const url =
+    "https://api.open-meteo.com/v1/forecast" +
+    `?latitude=${encodeURIComponent(String(lat))}` +
+    `&longitude=${encodeURIComponent(String(lon))}` +
+    "&timezone=auto" +
+    "&daily=sunset" +
+    "&hourly=cloud_cover,precipitation_probability,precipitation,weathercode,temperature_2m,windspeed_10m";
 
-  // NOTE: We request tags + center. We also filter out some things directly in query.
-  const query = `
-[out:json][timeout:25];
-(
-  nwr["natural"="beach"](${south},${west},${north},${east});
-  nwr["place"="beach"](${south},${west},${north},${east});
-);
-out center tags;
-`.trim();
-
-  const data = await postOverpass(query);
-  const elements: any[] = Array.isArray(data?.elements) ? data.elements : [];
-
-  const normalized: Beach[] = [];
-
-  for (const el of elements) {
-    const osmType = el.type as "node" | "way" | "relation";
-    const osmId = Number(el.id);
-    const tags: Record<string, string> = el.tags ?? {};
-
-    // access filtering
-    const access = (tags["access"] || "").toLowerCase();
-    if (access === "no" || access === "private") continue;
-
-    // drop obvious non-beaches
-    if (isObviouslyNotABeach(tags)) continue;
-
-    // get location
-    let bLat: number | null = null;
-    let bLon: number | null = null;
-
-    if (osmType === "node" && typeof el.lat === "number" && typeof el.lon === "number") {
-      bLat = el.lat;
-      bLon = el.lon;
-    } else if (el.center && typeof el.center.lat === "number" && typeof el.center.lon === "number") {
-      bLat = el.center.lat;
-      bLon = el.center.lon;
-    }
-    if (bLat == null || bLon == null) continue;
-
-    // prefer real names; if missing, skip (prevents "Unnamed beach" spam)
-    const name = bestName(tags);
-    if (!name) continue;
-
-    normalized.push({ osmType, osmId, name, lat: bLat, lon: bLon, tags });
+  const resp = await fetch(url);
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => "");
+    throw new Error(`Open-Meteo error ${resp.status}: ${text.slice(0, 180)}`);
   }
 
-  // Basic de-dupe: same name + within 0.3 miles
-  const deduped: Beach[] = [];
-  for (const b of normalized) {
-    const keyName = b.name.toLowerCase();
-    const close = deduped.find(
-      (x) => x.name.toLowerCase() === keyName && haversineMiles(x.lat, x.lon, b.lat, b.lon) < 0.3
-    );
-    if (!close) deduped.push(b);
+  const json = await resp.json();
+
+  const sunsetArr: string[] = json?.daily?.sunset ?? [];
+  const sunsetLocalISO = sunsetArr[0];
+  if (!sunsetLocalISO) {
+    throw new Error("Open-Meteo did not return sunset time.");
   }
 
-  // WATER PROXIMITY CHECK:
-  // Keep only beaches near water/coastline.
-  // This kills “Fremont beaches” and other inland nonsense.
-  const validated = await filterByWaterProximity(deduped);
+  const hourlyTimes: string[] = json?.hourly?.time ?? [];
+  const cloud: number[] = json?.hourly?.cloud_cover ?? [];
+  const pp: number[] = json?.hourly?.precipitation_probability ?? [];
+  const pr: number[] = json?.hourly?.precipitation ?? [];
+  const wc: number[] = json?.hourly?.weathercode ?? [];
+  const tempC: number[] = json?.hourly?.temperature_2m ?? [];
+  const windKmh: number[] = json?.hourly?.windspeed_10m ?? [];
 
-  cacheSet(cellKey, validated, 7 * 24 * 60 * 60 * 1000);
-  return validated;
-}
+  const idx = closestHourlyIndex(hourlyTimes, sunsetLocalISO);
 
-async function filterByWaterProximity(beaches: Beach[]): Promise<Beach[]> {
-  if (beaches.length === 0) return beaches;
+  const cloudCoverPct = Number(cloud?.[idx] ?? 100);
+  const precipProb = Number(pp?.[idx] ?? 0);
+  const precipMm = Number(pr?.[idx] ?? 0);
+  const weatherCode = Number(wc?.[idx] ?? 0);
+  const tempF = Number.isFinite(tempC?.[idx])
+    ? (Number(tempC[idx]) * 9) / 5 + 32
+    : 60;
+  const windMph = Number.isFinite(windKmh?.[idx])
+    ? Number(windKmh[idx]) * 0.621371
+    : 5;
 
-  // Cap to avoid huge queries
-  const cap = beaches.slice(0, 80);
+  // Haze risk heuristic: high cloud + low precip isn’t haze; haze is hard to know without AQI.
+  // Keep your older “hazeRisk” input but default false unless you add a real AQI source.
+  const hazeRisk = false;
 
-  // Coastline-only query (ocean/littoral edges). No rivers, no lakes.
-  const blocks = cap
-    .map((b) => {
-      return `
-(
-  nwr(around:6000,${b.lat},${b.lon})["natural"="coastline"];
-);
-out center;`;
-    })
-    .join("\n");
-
-  const q = `
-[out:json][timeout:25];
-${blocks}
-`.trim();
-
-  let data: any;
-  try {
-    data = await postOverpass(q);
-  } catch {
-    // If Overpass is flaky, don't kill the request. Return unfiltered.
-    return beaches;
-  }
-
-  const elements: any[] = Array.isArray(data?.elements) ? data.elements : [];
-
-  // Extract coastline points we can measure against
-  const coastPoints: Array<{ lat: number; lon: number }> = [];
-  for (const el of elements) {
-    const tags: Record<string, string> = el.tags ?? {};
-    if (tags["natural"] !== "coastline") continue;
-
-    if (typeof el.lat === "number" && typeof el.lon === "number") {
-      coastPoints.push({ lat: el.lat, lon: el.lon });
-    } else if (el.center && typeof el.center.lat === "number" && typeof el.center.lon === "number") {
-      coastPoints.push({ lat: el.center.lat, lon: el.center.lon });
-    }
-  }
-
-  if (coastPoints.length === 0) {
-    // If we couldn't fetch coastline points, don't filter.
-    return beaches;
-  }
-
-  // Keep only beaches within X miles of coastline.
-  // 3.0 miles works well to remove Fremont/Niles-style “beaches”.
-  const MAX_COAST_MILES = 3.0;
-
-  return beaches.filter((b) => {
-    let best = Infinity;
-    for (const p of coastPoints) {
-      const d = haversineMiles(b.lat, b.lon, p.lat, p.lon);
-      if (d < best) best = d;
-    }
-    return best <= MAX_COAST_MILES;
-  });
-}
-
-// ---------------------------
-// 2) Sunset time
-// ---------------------------
-async function getSunsetTimeISO(lat: number, lon: number, dateISO: string): Promise<string> {
-  const cacheKey = `sunset:${round2(lat)}:${round2(lon)}:${dateISO}`;
-  const cached = cacheGet<string>(cacheKey);
-  if (cached) return cached;
-
-  const url = new URL("https://api.sunrise-sunset.org/json");
-  url.searchParams.set("lat", String(lat));
-  url.searchParams.set("lng", String(lon));
-  url.searchParams.set("date", dateISO);
-  url.searchParams.set("formatted", "0");
-
-  const resp = await fetch(url.toString());
-  if (!resp.ok) throw new Error(`Sunset API error: HTTP ${resp.status}`);
-
-  const j = await resp.json();
-  const sunsetUtc = j?.results?.sunset;
-  if (typeof sunsetUtc !== "string") throw new Error("Sunset API: missing sunset");
-
-  cacheSet(cacheKey, sunsetUtc, 24 * 60 * 60 * 1000);
-  return sunsetUtc;
-}
-
-// ---------------------------
-// 3) Weather + Routing providers (stubs)
-// ---------------------------
-async function getWeatherAtSunset(_lat: number, _lon: number, _sunsetUtcISO: string): Promise<WeatherAtSunset> {
-  return {
-    cloudCoverPct: 20,
-    tempF: 62,
-    windMph: 10,
-    hazeRisk: false,
+  const wxAtSunset: WxAtTime = {
+    cloudCoverPct,
+    hazeRisk,
+    precipMm,
+    precipProb,
+    weatherCode,
+    tempF,
+    windMph,
+    timeLocalISO: hourlyTimes[idx] ?? sunsetLocalISO,
   };
-}
 
-async function getEtaMinutes(
-  _fromLat: number,
-  _fromLon: number,
-  _toLat: number,
-  _toLon: number,
-  _departAtISO: string
-): Promise<{ etaMinutes: number; trafficLabel: "Low traffic" | "Heavy traffic" | null }> {
-  const dist = haversineMiles(_fromLat, _fromLon, _toLat, _toLon);
-  const eta = Math.max(5, Math.round((dist / 35) * 60));
-  const trafficLabel = eta > 45 ? "Heavy traffic" : null;
-  return { etaMinutes: eta, trafficLabel };
+  const out = { sunsetLocalISO, wxAtSunset };
+  cacheSet(key, out, 10 * 60 * 1000); // 10 min
+  return out;
 }
 
 // ---------------------------
-// 4) Scoring + chips
+// Scoring
 // ---------------------------
-function skyScore(cloudPct: number, hazeRisk: boolean): { score: number; chip: string } {
+
+// Sky score now considers precip too.
+// Always returns a non-empty chip.
+function skyScore(input: {
+  cloudPct: number;
+  hazeRisk: boolean;
+  precipMm: number;
+  precipProb: number;
+  weatherCode: number;
+}): { score: number; chip: string } {
+  const cloudPct = Number.isFinite(input.cloudPct) ? input.cloudPct : 100;
+  const precipMm = Number.isFinite(input.precipMm) ? input.precipMm : 0;
+  const precipProb = Number.isFinite(input.precipProb) ? input.precipProb : 0;
+
+  // Rain override: if it's likely raining around sunset, it’s not “mostly clear”.
+  const rainingLikely = precipProb >= 50 || precipMm >= 1.0;
+
   let score = 0;
-  let chip = "Overcast risk";
+  let chip = "";
 
-  if (cloudPct <= 10) { score = 40; chip = "Clear skies"; }
-  else if (cloudPct <= 30) { score = 32; chip = "Mostly clear"; }
-  else if (cloudPct <= 60) { score = 20; chip = "Partly cloudy"; }
-  else if (cloudPct <= 85) { score = 8; chip = "Cloudy"; }
-  else { score = 0; chip = "Overcast risk"; }
+  if (rainingLikely) {
+    score = 0;
+    chip = precipProb >= 70 ? "Rain likely" : "Possible rain";
+  } else {
+    if (cloudPct <= 10) {
+      score = 40;
+      chip = "Clear skies";
+    } else if (cloudPct <= 30) {
+      score = 32;
+      chip = "Mostly clear";
+    } else if (cloudPct <= 60) {
+      score = 20;
+      chip = "Partly cloudy";
+    } else if (cloudPct <= 85) {
+      score = 8;
+      chip = "Cloudy";
+    } else {
+      score = 0;
+      chip = "Overcast risk";
+    }
+  }
 
-  if (hazeRisk) score = Math.max(0, score - 8);
+  if (input.hazeRisk) {
+    score = Math.max(0, score - 8);
+    chip = "Haze risk";
+  }
 
-  return { score, chip: hazeRisk ? "Haze risk" : chip };
+  // Hard guarantee (prevents blank pills forever)
+  if (!chip.trim()) chip = "Sky unknown";
+
+  return { score, chip };
 }
 
 function feasibilityScore(
-  sunsetUtcISO: string,
-  departAtISO: string,
+  sunsetLocalISO: string,
+  departAtISO: string | undefined,
   etaMinutes: number
 ): { score: number; chip: string; bufferMin: number } {
-  const tSunset = new Date(sunsetUtcISO).getTime();
-  const tDepart = new Date(departAtISO).getTime();
-  const tArrive = tDepart + etaMinutes * 60 * 1000;
+  // if departAtISO missing => "now"
+  const depart = departAtISO ? Date.parse(departAtISO) : Date.now();
+  const sunset = Date.parse(sunsetLocalISO);
 
-  const bufferMin = Math.round((tSunset - tArrive) / (60 * 1000));
+  if (!Number.isFinite(sunset) || !Number.isFinite(depart)) {
+    return { score: 0, chip: "Timing unknown", bufferMin: 0 };
+  }
+
+  const arrive = depart + etaMinutes * 60_000;
+  const bufferMin = Math.floor((sunset - arrive) / 60_000);
 
   let score = 0;
-  let chip = "You’ll miss sunset";
+  let chip = "";
 
-  if (bufferMin >= 30) { score = 35; chip = `Arrive ${bufferMin} min early`; }
-  else if (bufferMin >= 15) { score = 25; chip = `Arrive ${bufferMin} min early`; }
-  else if (bufferMin >= 5) { score = 12; chip = `Tight timing (${bufferMin} min early)`; }
-  else if (bufferMin >= 0) { score = 5; chip = `Very tight (${bufferMin} min early)`; }
-  else { score = 0; chip = `Miss by ${Math.abs(bufferMin)} min`; }
+  if (bufferMin >= 30) {
+    score = 35;
+    chip = `Arrive ${bufferMin} min early`;
+  } else if (bufferMin >= 15) {
+    score = 25;
+    chip = `Arrive ${bufferMin} min early`;
+  } else if (bufferMin >= 5) {
+    score = 12;
+    chip = `Tight timing (${bufferMin} min early)`;
+  } else if (bufferMin >= 0) {
+    score = 5;
+    chip = `Very tight (${bufferMin} min early)`;
+  } else {
+    score = 0;
+    chip = `Miss by ${Math.abs(bufferMin)} min`;
+  }
 
+  if (!chip.trim()) chip = "Timing unknown";
   return { score, chip, bufferMin };
 }
 
@@ -415,95 +464,136 @@ function comfortScore(tempF: number, windMph: number): { score: number; chips: s
   let score = 15;
   const chips: string[] = [];
 
-  if (tempF < 50) { score -= 6; chips.push("Cold"); }
-  else if (tempF < 58) { score -= 3; chips.push("Chilly"); }
-  else if (tempF <= 75) { chips.push("Comfortable temp"); }
-  else { score -= 3; chips.push("Warm"); }
+  if (tempF < 50) {
+    score -= 6;
+    chips.push("Cold");
+  } else if (tempF < 58) {
+    score -= 3;
+    chips.push("Chilly");
+  } else if (tempF <= 75) {
+    chips.push("Comfortable temp");
+  } else {
+    score -= 3;
+    chips.push("Warm");
+  }
 
-  if (windMph > 25) { score -= 10; chips.push("Very windy"); }
-  else if (windMph > 15) { score -= 5; chips.push("Windy"); }
+  if (windMph > 25) {
+    score -= 10;
+    chips.push("Very windy");
+  } else if (windMph > 15) {
+    score -= 5;
+    chips.push("Windy");
+  }
 
   score = Math.max(0, Math.min(15, score));
   return { score, chips };
 }
 
+// Small OSM tag signal: give a few points if it’s explicitly a beach + named.
 function osmSignalScore(tags: Record<string, string>): number {
-  if (tags["natural"] === "beach") return 10;
-  if (tags["place"] === "beach") return 6;
-  return 0;
+  let s = 0;
+  if ((tags?.natural || "") === "beach") s += 6;
+  if (tags?.name) s += 2;
+  // private beaches can be worse for “go now”
+  if ((tags?.access || "").toLowerCase() === "private") s -= 3;
+  return Math.max(-5, Math.min(10, s));
 }
 
-function buildWhy(chips: string[]): string {
-  const top = chips.slice(0, 3);
-  return top.length ? `${top.join(", ")}.` : "Best option nearby based on current conditions.";
+// “Traffic” label placeholder (you can wire a real API later)
+function trafficChip(etaMinutes: number): string | null {
+  if (!Number.isFinite(etaMinutes)) return null;
+  if (etaMinutes <= 20) return null;
+  if (etaMinutes <= 35) return "Moderate drive";
+  return "Longer drive";
 }
 
 // ---------------------------
-// Route handler
+// Main route
 // ---------------------------
-export async function GET(req: NextRequest) {
+export async function POST(req: Request) {
   try {
-    const { searchParams } = new URL(req.url);
+    const body = await req.json().catch(() => ({}));
 
-    const lat = Number(searchParams.get("lat"));
-    const lon = Number(searchParams.get("lon"));
-    const radiusMiles = Number(searchParams.get("radius_miles") ?? "30");
-    const mode = (searchParams.get("mode") ?? "now") as Mode;
-    const departAt = searchParams.get("depart_at");
+    const lat = Number(body?.lat);
+    const lon = Number(body?.lon);
+    const radiusMiles = Number(body?.radiusMiles ?? 30);
+    const mode: Mode = body?.mode === "later" ? "later" : "now";
+    const departAtISO: string | undefined = body?.departAtISO ? String(body.departAtISO) : undefined;
 
     if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
-      return NextResponse.json({ error: "Missing/invalid lat/lon" }, { status: 400 });
+      return NextResponse.json({ error: "Invalid lat/lon" }, { status: 400 });
     }
+
     if (!Number.isFinite(radiusMiles) || radiusMiles <= 0 || radiusMiles > 200) {
-      return NextResponse.json({ error: "Invalid radius_miles (1..200)" }, { status: 400 });
-    }
-    if (mode !== "now" && mode !== "later") {
-      return NextResponse.json({ error: "Invalid mode (now|later)" }, { status: 400 });
+      return NextResponse.json({ error: "Invalid radiusMiles" }, { status: 400 });
     }
 
-    const now = new Date();
-    const dateISO = now.toISOString().slice(0, 10);
-    const departAtISO = mode === "later" && departAt ? new Date(departAt).toISOString() : now.toISOString();
+    // 1) Sunset + weather at user location (used for scoring)
+    const { sunsetLocalISO, wxAtSunset } = await fetchSunsetAndWx(lat, lon);
 
-    // 1) Beaches
-    const beaches = await fetchBeachesOverpass(lat, lon, radiusMiles);
+    // 2) Overpass beaches
+    const bbox = bboxFromRadiusMiles(lat, lon, radiusMiles);
+    const overpassQuery = buildBeachOverpassQuery(bbox);
 
-    if (beaches.length === 0) {
-      return NextResponse.json({
+    const overpassKey = `overpass:${round2(bbox.south)}:${round2(bbox.west)}:${round2(bbox.north)}:${round2(bbox.east)}`;
+    let elements: OverpassElement[] | null = cacheGet(overpassKey);
+
+    if (!elements) {
+      const json = await postOverpass(overpassQuery);
+      elements = Array.isArray(json?.elements) ? (json.elements as OverpassElement[]) : [];
+      cacheSet(overpassKey, elements, 15 * 60 * 1000); // 15 min cache
+    }
+
+    const candidates: BeachCandidate[] = [];
+    for (const el of elements) {
+      const c = elementToCandidate(el);
+      if (!c) continue;
+      if (!isPlausibleBeach(c)) continue;
+
+      // Keep within radius (Overpass bbox can include corners outside circle)
+      const d = haversineMiles(lat, lon, c.lat, c.lon);
+      if (d > radiusMiles) continue;
+
+      candidates.push(c);
+    }
+
+    if (candidates.length === 0) {
+      const empty: RecommendationsResponse = {
         mode,
         radius_miles: radiusMiles,
+        depart_at: departAtISO,
+        sunset_time_local: sunsetLocalISO,
         results: [],
-        message: "No beaches found in this radius. Try increasing radius_miles.",
-      });
+      };
+      return NextResponse.json(empty);
     }
 
-    // 2) Sunset
-    const sunsetUtcISO = await getSunsetTimeISO(lat, lon, dateISO);
-
-    // 3) Score beaches
-    const maxCandidates = Math.min(beaches.length, 40);
-    const candidates = beaches
-      .map((b) => ({ b, dist: haversineMiles(lat, lon, b.lat, b.lon) }))
-      .sort((a, c) => a.dist - c.dist)
-      .slice(0, maxCandidates);
-
+    // 3) Score
     const recs: Recommendation[] = [];
-    for (const { b } of candidates) {
-      const { etaMinutes, trafficLabel } = await getEtaMinutes(lat, lon, b.lat, b.lon, departAtISO);
-      const wx = await getWeatherAtSunset(b.lat, b.lon, sunsetUtcISO);
 
-      const sky = skyScore(wx.cloudCoverPct, wx.hazeRisk);
-      const feas = feasibilityScore(sunsetUtcISO, departAtISO, etaMinutes);
-      const comfort = comfortScore(wx.tempF, wx.windMph);
+    for (const b of candidates) {
+      // ETA placeholder: assume 1.0 mile per 2.0 minutes (crude)
+      // Replace with a routing API later.
+      const distMi = haversineMiles(lat, lon, b.lat, b.lon);
+      const etaMinutes = Math.max(1, Math.round(distMi * 2));
+
+      const trafficLabel = trafficChip(etaMinutes);
+
+      const sky = skyScore({
+        cloudPct: wxAtSunset.cloudCoverPct,
+        hazeRisk: wxAtSunset.hazeRisk,
+        precipMm: wxAtSunset.precipMm,
+        precipProb: wxAtSunset.precipProb,
+        weatherCode: wxAtSunset.weatherCode,
+      });
+
+      const feas = feasibilityScore(sunsetLocalISO, departAtISO, etaMinutes);
+      const comfort = comfortScore(wxAtSunset.tempF, wxAtSunset.windMph);
       const osm = osmSignalScore(b.tags);
 
       const total = Math.round(sky.score + feas.score + comfort.score + osm);
 
-      const chips: string[] = [];
-      chips.push(sky.chip);
-      chips.push(feas.chip);
-      if (trafficLabel) chips.push(trafficLabel);
-      chips.push(...comfort.chips);
+      const chips = cleanChips([sky.chip, feas.chip, trafficLabel, ...comfort.chips]);
 
       recs.push({
         name: b.name,
@@ -513,24 +603,24 @@ export async function GET(req: NextRequest) {
         eta_minutes: etaMinutes,
         chips,
         why: buildWhy(chips),
-        sunset_time_local: sunsetUtcISO,
+        sunset_time_local: sunsetLocalISO,
       });
     }
 
     recs.sort((a, b) => b.score - a.score);
-    const top10 = recs.slice(0,10)
 
-    return NextResponse.json({
+    const top10 = recs.slice(0, 10);
+
+    const payload: RecommendationsResponse = {
       mode,
       radius_miles: radiusMiles,
       depart_at: departAtISO,
-      sunset_time_local: sunsetUtcISO,
+      sunset_time_local: sunsetLocalISO,
       results: top10,
-    });
+    };
+
+    return NextResponse.json(payload);
   } catch (err: any) {
-    return NextResponse.json(
-      { error: err?.message ?? "Unknown error" },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: err?.message ?? "Unknown error" }, { status: 500 });
   }
 }

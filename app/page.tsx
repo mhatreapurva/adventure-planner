@@ -13,7 +13,12 @@ import { useRecommendations } from "@/hooks/useRecommendations";
 import type { Mode } from "@/types/api";
 
 export default function Page() {
-  const { coords, error: geoError, loading: geoLoading, refresh } = useGeolocation();
+  const {
+    coords,
+    error: geoError,
+    loading: geoLoading,
+    refresh,
+  } = useGeolocation();
   const { data, error: apiError, loading, run } = useRecommendations();
 
   const [lat, setLat] = useState<string>("");
@@ -82,7 +87,9 @@ export default function Page() {
     if (!hasCoords) return;
 
     const departAtISO =
-      mode === "later" && departAtLocal ? new Date(departAtLocal).toISOString() : undefined;
+      mode === "later" && departAtLocal
+        ? new Date(departAtLocal).toISOString()
+        : undefined;
 
     await run({
       lat: Number(lat),
@@ -146,10 +153,20 @@ export default function Page() {
 
           {geocodeError && <div className={styles.error}>{geocodeError}</div>}
           {error && <div className={styles.error}>{error}</div>}
-          {data?.message && <div className={styles.message}>{data.message}</div>}
+          {data?.message && (
+            <div className={styles.message}>{data.message}</div>
+          )}
         </section>
-
-        {data && <Results data={data} />}
+        {data && (
+          <Results
+            data={data}
+            origin={
+              Number.isFinite(Number(lat)) && Number.isFinite(Number(lon))
+                ? { lat: Number(lat), lon: Number(lon) }
+                : null
+            }
+          />
+        )}
       </div>
     </main>
   );
