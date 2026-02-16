@@ -1,5 +1,10 @@
-// lib/api.ts
-import type { Mode, RecommendationsResponse } from "@/types/api";
+// app/api.ts
+import type {
+  Mode,
+  RecommendationsApiResponse,
+  RecommendationsResponse,
+} from "@/types/api";
+import { isApiError } from "@/types/api";
 
 export async function fetchRecommendations(args: {
   lat: number;
@@ -8,23 +13,24 @@ export async function fetchRecommendations(args: {
   mode: Mode;
   departAtISO?: string;
 }): Promise<RecommendationsResponse> {
-  const url = new URL("/api/recommendations", window.location.origin);
-  url.searchParams.set("lat", String(args.lat));
-  url.searchParams.set("lon", String(args.lon));
-  url.searchParams.set("radius_miles", String(args.radiusMiles));
-  url.searchParams.set("mode", args.mode);
+  const resp = await fetch("/api/recommendations", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(args),
+  });
 
-  if (args.mode === "later" && args.departAtISO) {
-    url.searchParams.set("depart_at", args.departAtISO);
+  let json: RecommendationsApiResponse;
+  try {
+    json = (await resp.json()) as RecommendationsApiResponse;
+  } catch {
+    throw new Error(`Request failed with status ${resp.status}`);
   }
-
-  const resp = await fetch(url.toString());
-  const json = (await resp.json()) as RecommendationsResponse;
 
   if (!resp.ok) {
-    throw new Error(json.error || `Request failed with status ${resp.status}`);
+    if (isApiError(json)) throw new Error(json.error);
+    throw new Error(`Request failed with status ${resp.status}`);
   }
-  if (json.error) throw new Error(json.error);
 
+  if (isApiError(json)) throw new Error(json.error);
   return json;
 }

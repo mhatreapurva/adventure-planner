@@ -153,10 +153,10 @@ export default function Page() {
 
           {geocodeError && <div className={styles.error}>{geocodeError}</div>}
           {error && <div className={styles.error}>{error}</div>}
-          {data?.message && (
-            <div className={styles.message}>{data.message}</div>
-          )}
-        </section>
+{data && data.results.length === 0 && (
+  <div className={styles.message}>No results returned.</div>
+)}
+	  </section>
         {data && (
           <Results
             data={data}

@@ -1,3 +1,4 @@
+// types/api.ts
 export type Mode = "now" | "later";
 
 export type Recommendation = {
@@ -18,3 +19,13 @@ export type RecommendationsResponse = {
   sunset_time_local: string;
   results: Recommendation[];
 };
+
+export type ApiErrorResponse = {
+  error: string;
+};
+
+export type RecommendationsApiResponse = RecommendationsResponse | ApiErrorResponse;
+
+export function isApiError(x: any): x is ApiErrorResponse {
+  return !!x && typeof x === "object" && typeof x.error === "string";
+}
