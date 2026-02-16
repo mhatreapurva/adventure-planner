@@ -295,10 +295,16 @@ function closestHourlyIndex(hourlyTimes: string[], targetISO: string) {
   return bestIdx;
 }
 
-async function fetchSunsetAndWx(lat: number, lon: number): Promise<{ sunsetLocalISO: string; wxAtSunset: WxAtTime }> {
-  // Cache per rounded location for a short TTL
-  const key = `wx:${round2(lat)}:${round2(lon)}`;
-  const cached = cacheGet<{ sunsetLocalISO: string; wxAtSunset: WxAtTime }>(key);
+async function fetchSunsetAndWx(
+  lat: number,
+  lon: number,
+  opts?: { targetISO?: string; cacheTag?: string }
+): Promise<{ sunsetLocalISO: string; wxAtTarget: WxAtTime; wxAtSunset: WxAtTime }> {
+  // Cache per rounded location + "what we asked for" (now vs sunset)
+  const tag = opts?.cacheTag ?? (opts?.targetISO ? "target" : "sunset");
+  const key = `wx:${round2(lat)}:${round2(lon)}:${tag}`;
+
+  const cached = cacheGet<{ sunsetLocalISO: string; wxAtTarget: WxAtTime; wxAtSunset: WxAtTime }>(key);
   if (cached) return cached;
 
   const url =
@@ -331,39 +337,45 @@ async function fetchSunsetAndWx(lat: number, lon: number): Promise<{ sunsetLocal
   const tempC: number[] = json?.hourly?.temperature_2m ?? [];
   const windKmh: number[] = json?.hourly?.windspeed_10m ?? [];
 
-  const idx = closestHourlyIndex(hourlyTimes, sunsetLocalISO);
+  // Build a WxAtTime from an hourly index (safe defaults)
+  function wxFromIdx(idx: number): WxAtTime {
+    const cloudCoverPct = Number(cloud?.[idx] ?? 100);
+    const precipProb = Number(pp?.[idx] ?? 0);
+    const precipMm = Number(pr?.[idx] ?? 0);
+    const weatherCode = Number(wc?.[idx] ?? 0);
 
-  const cloudCoverPct = Number(cloud?.[idx] ?? 100);
-  const precipProb = Number(pp?.[idx] ?? 0);
-  const precipMm = Number(pr?.[idx] ?? 0);
-  const weatherCode = Number(wc?.[idx] ?? 0);
-  const tempF = Number.isFinite(tempC?.[idx])
-    ? (Number(tempC[idx]) * 9) / 5 + 32
-    : 60;
-  const windMph = Number.isFinite(windKmh?.[idx])
-    ? Number(windKmh[idx]) * 0.621371
-    : 5;
+    const tempF = Number.isFinite(tempC?.[idx]) ? (Number(tempC[idx]) * 9) / 5 + 32 : 60;
+    const windMph = Number.isFinite(windKmh?.[idx]) ? Number(windKmh[idx]) * 0.621371 : 5;
 
-  // Haze risk heuristic: high cloud + low precip isn’t haze; haze is hard to know without AQI.
-  // Keep your older “hazeRisk” input but default false unless you add a real AQI source.
-  const hazeRisk = false;
+    const hazeRisk = false;
 
-  const wxAtSunset: WxAtTime = {
-    cloudCoverPct,
-    hazeRisk,
-    precipMm,
-    precipProb,
-    weatherCode,
-    tempF,
-    windMph,
-    timeLocalISO: hourlyTimes[idx] ?? sunsetLocalISO,
-  };
+    return {
+      cloudCoverPct,
+      hazeRisk,
+      precipMm,
+      precipProb,
+      weatherCode,
+      tempF,
+      windMph,
+      timeLocalISO: hourlyTimes[idx] ?? sunsetLocalISO,
+    };
+  }
 
-  const out = { sunsetLocalISO, wxAtSunset };
+  // Always compute sunset bucket
+  const sunsetIdx = closestHourlyIndex(hourlyTimes, sunsetLocalISO);
+  const wxAtSunset = wxFromIdx(sunsetIdx);
+
+  // Decide target bucket:
+  // - if opts.targetISO provided => use that (for "now")
+  // - else => default to sunset (previous behavior)
+  const targetISO = opts?.targetISO ?? sunsetLocalISO;
+  const targetIdx = closestHourlyIndex(hourlyTimes, targetISO);
+  const wxAtTarget = wxFromIdx(targetIdx);
+
+  const out = { sunsetLocalISO, wxAtTarget, wxAtSunset };
   cacheSet(key, out, 10 * 60 * 1000); // 10 min
   return out;
 }
-
 // ---------------------------
 // Scoring
 // ---------------------------
@@ -529,8 +541,11 @@ export async function POST(req: Request) {
     }
 
     // 1) Sunset + weather at user location (used for scoring)
-    const { sunsetLocalISO, wxAtSunset } = await fetchSunsetAndWx(lat, lon);
-
+    const useNow = mode === "now";
+const { sunsetLocalISO, wxAtTarget, wxAtSunset } = await fetchSunsetAndWx(lat, lon, {
+  targetISO: useNow ? new Date().toISOString() : undefined,
+  cacheTag: useNow ? "now" : "sunset",
+});
     // 2) Overpass beaches
     const bbox = bboxFromRadiusMiles(lat, lon, radiusMiles);
     const overpassQuery = buildBeachOverpassQuery(bbox);
@@ -577,19 +592,21 @@ export async function POST(req: Request) {
       const distMi = haversineMiles(lat, lon, b.lat, b.lon);
       const etaMinutes = Math.max(1, Math.round(distMi * 2));
 
-      const trafficLabel = trafficChip(etaMinutes);
+const trafficLabel = trafficChip(etaMinutes);
 
-      const sky = skyScore({
-        cloudPct: wxAtSunset.cloudCoverPct,
-        hazeRisk: wxAtSunset.hazeRisk,
-        precipMm: wxAtSunset.precipMm,
-        precipProb: wxAtSunset.precipProb,
-        weatherCode: wxAtSunset.weatherCode,
-      });
+const wx = useNow ? wxAtTarget : wxAtSunset;
 
-      const feas = feasibilityScore(sunsetLocalISO, departAtISO, etaMinutes);
-      const comfort = comfortScore(wxAtSunset.tempF, wxAtSunset.windMph);
-      const osm = osmSignalScore(b.tags);
+const sky = skyScore({
+  cloudPct: wx.cloudCoverPct,
+  hazeRisk: wx.hazeRisk,
+  precipMm: wx.precipMm,
+  precipProb: wx.precipProb,
+  weatherCode: wx.weatherCode,
+});
+
+const feas = feasibilityScore(sunsetLocalISO, departAtISO, etaMinutes);
+const comfort = comfortScore(wx.tempF, wx.windMph);
+const osm = osmSignalScore(b.tags);
 
       const total = Math.round(sky.score + feas.score + comfort.score + osm);
 

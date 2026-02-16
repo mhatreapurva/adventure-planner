@@ -26,8 +26,7 @@ export function Results({ data, origin = null }: Props) {
 
   return (
     <section>
-      {origin ? <ResultsMap origin={origin} results={data.results} /> : null}
-
+{origin ? <ResultsMap origin={origin} results={data.results} radiusMiles={data.radius_miles} /> : null}
       <div
         style={{
           display: "flex",
