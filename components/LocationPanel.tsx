@@ -1,7 +1,7 @@
-// components/LocationPanel.tsx
 "use client";
 
 import React from "react";
+import { MapPin, Search, Loader2 } from "lucide-react";
 import styles from "@/app/page.module.css";
 
 export function LocationPanel(props: {
@@ -11,11 +11,8 @@ export function LocationPanel(props: {
   onLatChange: (v: string) => void;
   onLonChange: (v: string) => void;
   onRadiusChange: (v: number) => void;
-
   onUseMyLocation: () => void;
   geoLoading?: boolean;
-
-  // NEW: Address search
   address: string;
   onAddressChange: (v: string) => void;
   onUseAddress: () => void;
@@ -26,41 +23,76 @@ export function LocationPanel(props: {
   const disableAddress = Boolean(props.geocodeLoading) || addr.length === 0;
 
   return (
-    <div className={styles.locationRow}>
-      <button
-        type="button"
-        onClick={props.onUseMyLocation}
-        className={styles.secondary}
-        disabled={disableMyLoc}
-        title={disableMyLoc ? "Getting location..." : "Use your current location"}
-      >
-        {disableMyLoc ? "Locating..." : "Use my location"}
-      </button>
+    <div className={styles.locationGrid}>
+      {/* Coordinates Group */}
+      <div className={styles.coordGroup}>
+        <div className={styles.inputWrapper}>
+          <label className={styles.inputLabel}>Latitude</label>
+          <div className={styles.relative}>
+            <input
+              value={props.lat}
+              onChange={(e) => props.onLatChange(e.target.value)}
+              placeholder="37.7749"
+              className={styles.input}
+              inputMode="decimal"
+            />
+            <button
+              type="button"
+              onClick={props.onUseMyLocation}
+              className={styles.inputAction}
+              disabled={disableMyLoc}
+              title="Use my location"
+            >
+              {props.geoLoading ? (
+                <Loader2 size={16} className={styles.spinner} />
+              ) : (
+                <MapPin size={16} />
+              )}
+            </button>
+          </div>
+        </div>
 
-      <label className={styles.field}>
-        <span className={styles.label}>Latitude</span>
-        <input
-          value={props.lat}
-          onChange={(e) => props.onLatChange(e.target.value)}
-          placeholder="e.g. 37.7749"
-          className={styles.input}
-          inputMode="decimal"
-        />
-      </label>
+        <div className={styles.inputWrapper}>
+          <label className={styles.inputLabel}>Longitude</label>
+          <input
+            value={props.lon}
+            onChange={(e) => props.onLonChange(e.target.value)}
+            placeholder="-122.4194"
+            className={styles.input}
+            inputMode="decimal"
+          />
+        </div>
+      </div>
 
-      <label className={styles.field}>
-        <span className={styles.label}>Longitude</span>
-        <input
-          value={props.lon}
-          onChange={(e) => props.onLonChange(e.target.value)}
-          placeholder="e.g. -122.4194"
-          className={styles.input}
-          inputMode="decimal"
-        />
-      </label>
+      {/* Address Group */}
+      <div className={styles.inputWrapper}>
+        <label className={styles.inputLabel}>Address / City</label>
+        <div className={styles.relative}>
+          <input
+            value={props.address ?? ""}
+            onChange={(e) => props.onAddressChange(e.target.value)}
+            placeholder='e.g. "Mountain View, CA"'
+            className={styles.input}
+            onKeyDown={(e) => e.key === "Enter" && !disableAddress && props.onUseAddress()}
+          />
+          <button
+            type="button"
+            onClick={props.onUseAddress}
+            className={styles.inputAction}
+            disabled={disableAddress}
+          >
+            {props.geocodeLoading ? (
+              <Loader2 size={16} className={styles.spinner} />
+            ) : (
+              <Search size={16} />
+            )}
+          </button>
+        </div>
+      </div>
 
-      <label className={styles.fieldSm}>
-        <span className={styles.label}>Radius (miles)</span>
+      {/* Radius Group */}
+      <div className={styles.inputWrapper} style={{ maxWidth: "120px" }}>
+        <label className={styles.inputLabel}>Radius (mi)</label>
         <input
           type="number"
           value={props.radiusMiles}
@@ -69,28 +101,7 @@ export function LocationPanel(props: {
           onChange={(e) => props.onRadiusChange(Number(e.target.value))}
           className={styles.input}
         />
-      </label>
-
-      {/* Address row */}
-      <label className={styles.fieldGrow}>
-        <span className={styles.label}>Address / City</span>
-        <input
-          value={props.address ?? ""}
-          onChange={(e) => props.onAddressChange(e.target.value)}
-          placeholder='e.g. "Mountain View, CA"'
-          className={styles.input}
-        />
-      </label>
-
-      <button
-        type="button"
-        onClick={props.onUseAddress}
-        className={styles.secondary}
-        disabled={disableAddress}
-        title={addr.length === 0 ? "Enter an address/city first" : "Use this address to set lat/lon"}
-      >
-        {props.geocodeLoading ? "Searching..." : "Use address"}
-      </button>
+      </div>
     </div>
   );
 }
